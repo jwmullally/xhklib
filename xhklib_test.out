@@ -1,0 +1,80 @@
+xhkBindKey(): Warning, changing existing binding
+              mod: ShiftMask | ControlMask + key: 'K'
+xhkBindKey(): Error, unable to find keycode for keysym 0x4D2
+xhk text: X11 fd: 3
+
+--pressed key: ShiftMask | ControlMask + K
+
+xhkPrintEvent(): Event type: xhkKeyPress  , time: 3785326 ms
+                 mod: ShiftMask | ControlMask + key: 'K'
+
+
+--pressed key: ShiftMask | ControlMask + L
+
+xhkPrintEvent(): Event type: xhkKeyPress  , time: 3787185 ms
+                 mod: ShiftMask | ControlMask + key: 'L'
+
+
+--Unbinding 'K' (30, 0)
+
+
+
+
+--Unbinding 'K' (30, 0)
+
+xhkUnBindKey(): Key binding not found
+                mod: ShiftMask | ControlMask + key: 'K'
+
+
+
+--pressed or released key: 33, 0
+
+xhkPrintEvent(): Event type: xhkKeyPress  , time: 3846072 ms
+                 mod: 0x0 + key: 'P'
+
+
+--pressed or released key: 33, 0
+
+xhkPrintEvent(): Event type:  xhkKeyRelease , time: 3850488 ms
+                 mod: 0x0 + key: 'P'
+
+
+--pressed or released key: 27, 0
+
+xhkPrintEvent(): Event type: xhkKeyPress  , time: 3851387 ms
+                 mod: 0x0 + key: 'R'
+
+
+--pressed or released key: 27, 0
+
+  (Repeat)
+xhkPrintEvent(): Event type: xhkKeyPress  xhkKeyRepeat, time: 3851888 ms
+                 mod: 0x0 + key: 'R'
+
+
+--pressed or released key: 27, 0
+
+  (Repeat)
+xhkPrintEvent(): Event type: xhkKeyPress  xhkKeyRepeat, time: 3851926 ms
+                 mod: 0x0 + key: 'R'
+
+
+--pressed or released key: 27, 0
+
+  (Repeat)
+xhkPrintEvent(): Event type: xhkKeyPress  xhkKeyRepeat, time: 3851962 ms
+                 mod: 0x0 + key: 'R'
+
+
+--pressed or released key: 27, 0
+
+  (Repeat)
+xhkPrintEvent(): Event type: xhkKeyPress  xhkKeyRepeat, time: 3851998 ms
+                 mod: 0x0 + key: 'R'
+
+
+--pressed or released key: 27, 0
+
+xhkPrintEvent(): Event type:  xhkKeyRelease , time: 3852001 ms
+                 mod: 0x0 + key: 'R'
+

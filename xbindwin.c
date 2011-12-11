@@ -20,19 +20,19 @@ int client_msg(Display *disp, Window win, char *msg,
 
 // User definable bind keys.
                                   // Bind key             // Set focus
-const int bindkeys[][2][2] = {{ { ControlMask, XK_F1 }, { Mod4Mask, XK_F1 } },
-                              { { ControlMask, XK_F2 }, { Mod4Mask, XK_F2 } },
-                              { { ControlMask, XK_F3 }, { Mod4Mask, XK_F3 } },
-                              { { ControlMask, XK_F4 }, { Mod4Mask, XK_F4 } },
-                              { { ControlMask, XK_F5 }, { Mod4Mask, XK_F5 } },
-                              { { ControlMask, XK_F6 }, { Mod4Mask, XK_F6 } },
-                              { { ControlMask, XK_F7 }, { Mod4Mask, XK_F7 } },
-                              { { ControlMask, XK_F8 }, { Mod4Mask, XK_F8 } }};
+const int bindkeys[][2][2] = {{ { ControlMask, XK_1 }, { Mod1Mask, XK_1 } },
+                              { { ControlMask, XK_2 }, { Mod1Mask, XK_2 } },
+                              { { ControlMask, XK_3 }, { Mod1Mask, XK_3 } },
+                              { { ControlMask, XK_4 }, { Mod1Mask, XK_4 } },
+                              { { ControlMask, XK_5 }, { Mod1Mask, XK_5 } },
+                              { { ControlMask, XK_6 }, { Mod1Mask, XK_6 } },
+                              { { ControlMask, XK_7 }, { Mod1Mask, XK_7 } },
+                              { { ControlMask, XK_8 }, { Mod1Mask, XK_8 } }};
 
 // END user definable keys
 
 
-#define LEN_BINDKEYS (sizeof(bindkeys)/(2*4*sizeof(int)))
+#define LEN_BINDKEYS (sizeof(bindkeys)/(4*sizeof(int)))
 
 Window get_active_window(Display *disp);
 int activate_window (Display *disp, Window win, int switch_desktop);

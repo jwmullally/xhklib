@@ -55,6 +55,14 @@ int main()
     xhkConfig hkconfig;
     xhkInit(&hkconfig);
 
+    // On Debian Linux, the list of XK_* keys are in:
+    //   /usr/include/X11/keysym.h
+    //   /usr/include/X11/keysymdef.h
+    // Modifier masks in /usr/include/X11/X.h
+    //
+    // This is also useful for finding which keys on a keyboard are mapped to:
+    //   xbindkeys -mk
+
     xhkBindKey(&hkconfig, 0, XK_P, 0, xhkKeyPress|xhkKeyRelease, &testPressRelease, 0, 0, 0);
 
     xhkBindKey(&hkconfig, 0, XK_K, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
@@ -75,6 +83,9 @@ int main()
 
     printf("xhk text: X11 fd: %x\n", (unsigned int) xhkGetfd(&hkconfig));
 
+    // This loop waits on X11 keyboard events.
+    // If you want to continue running other code while capturing the hotkeys
+    // in the background, you'll have to run xhkPollKeys in a seperate thread.
     while (1) {
         xhkPollKeys(&hkconfig, 1);
         if (vquit == 1)

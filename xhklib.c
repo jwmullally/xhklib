@@ -9,7 +9,7 @@
 
 #include "xhklib.h"
 
-// get_offending_modifiers, *grab_key from xbindkeys: grab_key.c (GPLv2)
+// jwm 2011. License: GPLv2
 
 // TODO: Review this in the future:
 // XkbSetDetectableAutoRepeat 
@@ -102,6 +102,7 @@ void xhkClose(xhkConfig *config)
 
 static xhkLockmasks get_offending_modifiers (Display * dpy)
 {
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
     int i;
     XModifierKeymap *modmap;
     KeyCode nlock, slock;
@@ -141,6 +142,7 @@ static xhkLockmasks get_offending_modifiers (Display * dpy)
 static void grab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks)
 {
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
     if (grab_window == 0)
         grab_window = DefaultRootWindow(dpy);
 
@@ -191,6 +193,7 @@ static void grab_key(Display * dpy, Window grab_window, int keycode,
 static void ungrab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks)
 {
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
     if (grab_window == 0)
         grab_window = DefaultRootWindow(dpy);
 
@@ -234,6 +237,7 @@ static void ungrab_key(Display * dpy, Window grab_window, int keycode,
 static void grab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks)
 {
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
     int screen;
     if (grab_window == 0) {
         for (screen = 0; screen < ScreenCount (dpy); screen++)
@@ -248,6 +252,7 @@ static void grab_key_all_screens(Display * dpy, Window grab_window,
 static void ungrab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks)
 {
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
     int screen;
     if (grab_window == 0) {
         for (screen = 0; screen < ScreenCount (dpy); screen++)

@@ -68,8 +68,7 @@ int xhkInit(xhkConfig *config)
     for(i=0; i<256; i++)
         config->last_key_state[i] = xhkKeyRelease;
 
-// TODO: Maybe re-enable at later date. See comment at top of file.
-#if 0
+#ifdef X_REPEAT_DETECT_WORKS
     XkbSetDetectableAutoRepeat(config->display, 1, &config->Xrepeat_detect);
     if (config->Xrepeat_detect == 0) {
         fprintf(stderr, 
@@ -100,6 +99,357 @@ void xhkClose(xhkConfig *config)
 }
 
 
+int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
+        unsigned int modifiers, unsigned int event_mask,
+        void (*func)(xhkEvent, void *, void *, void *), 
+        void *arg1, void *arg2, void *arg3)
+{
+    int ret = 0;
+    int keycode;
+    xhkHotkey *h;
+    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
+
+    keycode = XKeysymToKeycode(config->display, keysym);
+    if (keycode == 0) {
+        fprintf(stderr, 
+            "xhkBindKey(): Error, unable to find keycode for keysym 0x%X\n",
+                (unsigned int) keysym);
+        return -1;
+    }
+
+    // Temporarily swap out Xlib fatal error handler for our own non-fatal
+    // one to handle XGrabKey errors as warnings. (e.g. Duplicate binds).
+    // As XGrabKey always returns 1, the Error handler is also the only way
+    // we can tell if an XGrabKey call fails.
+    XSync(config->display, 0);
+    global_last_X_error_code = 0;
+    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
+    grab_key_all_screens(config->display, grab_window, keycode, modifiers, 
+            config->lmasks);
+    XSync(config->display, 0);
+    XSetErrorHandler(prev_XErrorHandler);
+    if (global_last_X_error_code != 0) {
+        fprintf(stderr,
+            "xhkBindKey(): Warning, unable to fully bind key..\n"
+            "              ... already bound by another program?\n"
+            "              mod: %s + key: '%s'\n",
+            xhkModifiersToString(modifiers), XKeysymToString(keysym));
+        // TODO: Just return?
+        ret = -1;
+    }
+
+    // Try search and redefine existing Hotkey. Add new one if none found.
+    h = config->hklist;
+    while (h->next != NULL 
+            && !(h->next->modifiers == modifiers && h->next->keycode ==keycode
+                 && h->next->event_mask == event_mask))
+        h = h->next;
+    if (h->next == NULL) {
+        h->next = malloc(sizeof(xhkHotkey));
+        h->next->next = NULL;
+    } else {
+        fprintf(stderr,
+                "xhkBindKey(): Warning, changing existing binding\n"
+                "              mod: %s + key: '%s'\n",
+            xhkModifiersToString(modifiers), XKeysymToString(keysym));
+    }
+
+    h = h->next;
+
+    h->keysym = keysym;
+    h->keycode = keycode;
+    h->modifiers = modifiers;
+    h->event_mask = (event_mask != 0) ? event_mask : xhkKeyPress;
+    h->func = func;
+    h->arg1 = arg1;
+    h->arg2 = arg2;
+    h->arg3 = arg3;
+    return ret;
+}
+
+
+int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
+        unsigned int modifiers, unsigned int event_mask)
+{
+    int ret = 0;
+    xhkHotkey *h, *hn;
+    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
+
+    int keycode;
+    keycode = XKeysymToKeycode(config->display, keysym);
+    if (keycode == 0) {
+        fprintf(stderr, 
+            "xhkUnBindKey(): Error, unable to find keycode for keysym: 0x%x\n",
+                (unsigned int) keysym);
+        return -1;
+    }
+
+    XSync(config->display, 0);
+    global_last_X_error_code = 0;
+    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
+    ungrab_key_all_screens(config->display, grab_window, keycode, modifiers, 
+            config->lmasks);
+    XSync(config->display, 0);
+    XSetErrorHandler(prev_XErrorHandler);
+    if (global_last_X_error_code != 0) {
+        fprintf(stderr,
+                "xhkUnBindKey(): X errors while unbinding\n"
+                "                mod: %s + key: '%s'\n",
+                xhkModifiersToString(modifiers), XKeysymToString(keysym));
+        ret = -1;
+    }
+
+    h = config->hklist;
+    while (h->next != NULL 
+            && !(h->next->modifiers == modifiers && h->next->keycode ==keycode
+                  && h->next->event_mask == event_mask))
+        h = h->next;
+    if (h->next == NULL) {
+        fprintf(stderr,
+                "xhkUnBindKey(): Key binding not found\n"
+                "                mod: %s + key: '%s'\n",
+                xhkModifiersToString(modifiers), XKeysymToString(keysym));
+        return -1;
+    }
+    hn = h->next;
+    h->next = h->next->next;
+    free(hn);
+    return ret;
+}
+
+
+// Process any pending key presses. Return when there
+// are no more pending. To block and wait for at least one, set wait_block = 1.
+void xhkPollKeys(xhkConfig *config, int wait_block)
+{
+    XEvent event, nev;
+    int handled_one = 0;
+    int matched;
+    int repeat_flag;
+
+    while (XPending(config->display) || (wait_block && !handled_one)) {
+
+        XNextEvent(config->display, &event);   // Blocks when no events pending.
+
+        repeat_flag = 0;
+
+        // Use X's repeat detection if supported.
+        if (config->Xrepeat_detect == 1) {
+            if (event.type == KeyPress) {
+                if (config->last_key_state[event.xkey.keycode] == xhkKeyPress)
+                    repeat_flag = xhkKeyRepeat;
+                config->last_key_state[event.xkey.keycode] = xhkKeyPress;
+            }
+            if (event.type == KeyRelease)
+                config->last_key_state[event.xkey.keycode] = xhkKeyRelease;
+        }
+        // Manual X repeat detection. In the event that X can't detect
+        // auto repeating keys itself, we try manually check whether the next
+        // event is an automatic key repeat. 
+        // Its a repeat when a KeyRelease is followed immedietly by a KeyPress.
+        // (See: http://stackoverflow.com/questions/2100654)
+        // One advantage is that using a small time difference threshold,
+        // we can protect against flaky hardware reporting spurious KeyRelease
+        // when the key is still held down, e.g. in my keyboard. User can 
+        // change this with xhkChangeRepeatThreshold(k).
+        // 
+        // Doesn't work unless both Release and Press events are in the queue 
+        // one after another. To handle that would need extra code to track
+        // the last press/release time of each key.
+        //
+        // Only repeat KeyPress events, like above.
+        if (config->Xrepeat_detect == 0 && event.type == KeyRelease
+                && XEventsQueued(config->display, QueuedAfterReading)) {
+            XPeekEvent(config->display, &nev);
+            if (nev.type == KeyPress 
+                    && nev.xkey.time - event.xkey.time < config->repeat_threshold
+                    && nev.xkey.keycode == event.xkey.keycode) {
+                XNextEvent(config->display, &event);
+                repeat_flag = xhkKeyRepeat;
+            }
+        }
+
+        switch (event.type) {
+            case KeyPress:
+                matched = call_function(config, event.xkey, 
+                                        xhkKeyPress | repeat_flag);
+                if (matched == 1)
+                    handled_one = 1;
+                break;
+            case KeyRelease:
+                matched = call_function(config, event.xkey, 
+                                        xhkKeyRelease | repeat_flag);
+                if (matched == 1)
+                    handled_one = 1;
+                break;
+            default:
+                break;
+        }
+    }
+    return;
+}
+
+
+void xhkPrintEvent(xhkEvent event)
+{
+    printf("xhkPrintEvent(): Event type: %s %s %s, time: %i ms\n"
+           "                 mod: %s + key: '%s'\n",
+           (event.event_mask & xhkKeyPress) ? "xhkKeyPress" : "",
+           (event.event_mask & xhkKeyRelease) ? "xhkKeyRelease" : "",
+           (event.event_mask & xhkKeyRepeat) ? "xhkKeyRepeat" : "",
+           (int) event.xkey.time,
+           xhkModifiersToString(event.modifiers), XKeysymToString(event.keysym));
+    return;
+}
+
+
+char * xhkKeySymToString(KeySym keysym)
+{
+    static char strbuffer[11];             // max "0xFFFFFFFF" + '\0'
+    if (XKeysymToString(keysym) == NULL) {
+        snprintf(strbuffer, 11, "0x%x", (unsigned int) keysym);
+        return strbuffer;
+    }
+    return XKeysymToString(keysym);
+}
+
+
+char * xhkModifiersToString(unsigned int modifiers)
+{
+    static char strbuffer[256];
+    char tmpbuffer[14];             // max "0xFFFFFFFF | " + '\0'
+    unsigned int mods;
+
+    mods = modifiers;
+    strbuffer[0] = '\0';
+
+    if (mods == 0)
+        return "0x0";
+    if (mods & ShiftMask ) {
+        strncat(strbuffer, "ShiftMask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~ShiftMask;
+    }
+    if (mods & LockMask ) {
+        strncat(strbuffer, "LockMask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~LockMask;
+    }
+    if (mods & ControlMask ) {
+        strncat(strbuffer, "ControlMask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~ControlMask;
+    }
+    if (mods & Mod1Mask ) {
+        strncat(strbuffer, "Mod1Mask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~Mod1Mask;
+    }
+    if (mods & Mod2Mask ) {
+        strncat(strbuffer, "Mod2Mask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~Mod2Mask;
+    }
+    if (mods & Mod3Mask ) {
+        strncat(strbuffer, "Mod3Mask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~Mod3Mask;
+    }
+    if (mods & Mod4Mask ) {
+        strncat(strbuffer, "Mod4Mask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~Mod4Mask;
+    }
+    if (mods & Mod5Mask ) {
+        strncat(strbuffer, "Mod5Mask | ", sizeof(strbuffer)-strlen(strbuffer)-1);
+        mods &= ~Mod5Mask;
+    }
+    if (mods != 0) {
+        snprintf(tmpbuffer, sizeof(tmpbuffer), "0x%x | ", mods);
+        strncat(strbuffer, tmpbuffer, sizeof(strbuffer)-strlen(strbuffer)-1);
+    }
+   
+    if (strlen(strbuffer) > 4)
+        strbuffer[strlen(strbuffer)-3] = '\0';      // Chop extra " | "
+
+    return strbuffer;
+}
+
+
+char * xhkModsKeyToString(unsigned int modifiers, KeySym keysym) 
+{
+    static char strbuffer[256];
+
+    strbuffer[0] = '\0';
+    if (modifiers != 0) {
+        strncat(strbuffer, xhkModifiersToString(modifiers), 
+                sizeof(strbuffer)-strlen(strbuffer)-1);
+        strncat(strbuffer, " + ", sizeof(strbuffer)-strlen(strbuffer)-1);
+    }
+    strncat(strbuffer, xhkKeySymToString(keysym), 
+            sizeof(strbuffer)-strlen(strbuffer)-1);
+
+    return strbuffer;
+}
+
+
+int xhkGetfd(xhkConfig *config)
+{
+    return XConnectionNumber(config->display);
+}
+
+
+void xhkSetRepeatThreshold(xhkConfig *config, unsigned int repeat_threshold)
+{
+    config->repeat_threshold = repeat_threshold;
+    return;
+}
+
+
+/* 
+ * HELPER FUNCTIONS
+ */
+
+
+static int test_event_match(xhkHotkey *base, xhkEvent *test)
+{
+    // Pass if the key and modifiers match
+    if ( !(base->modifiers == test->modifiers && base->keycode == test->keycode) )
+        return 0;
+    // Pass if its a Press or Release event and we want them
+    if ( !((base->event_mask & xhkKeyPress) == (test->event_mask & xhkKeyPress)
+                || (base->event_mask & xhkKeyRelease) == (test->event_mask & xhkKeyRelease)) )
+        return 0;
+    // If its a repeat, pass if we want it
+    if ( test->event_mask & xhkKeyRepeat )
+        if ( !(base->event_mask & xhkKeyRepeat) )
+            return 0;
+    return 1;
+}
+
+
+static int call_function(xhkConfig *config, XKeyEvent xkey, 
+        unsigned int event_mask)
+{
+    xhkEvent testevent;
+    xhkHotkey *h;
+
+    testevent.lmasks = config->lmasks;
+    testevent.xkey = xkey;
+    testevent.keycode = xkey.keycode;
+    testevent.locks = xkey.state & ( config->lmasks.numlock
+            | config->lmasks.capslock | config->lmasks.scrolllock );
+    testevent.modifiers = xkey.state & ~(testevent.locks);
+    testevent.event_mask = event_mask;
+
+    h = config->hklist;
+    while (h != NULL && test_event_match(h, &testevent) != 1)
+        h = h->next;
+
+    if (h != NULL) {
+        testevent.keysym = h->keysym;
+        (*h->func)(testevent, h->arg1, h->arg2, h->arg3);
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+
+// Return the bitmasks for Numlock, Capslock, Scrolllock
 static xhkLockmasks get_offending_modifiers (Display * dpy)
 {
     // Based on code from xbindkeys: grab_key.c (GPLv2)
@@ -120,10 +470,8 @@ static xhkLockmasks get_offending_modifiers (Display * dpy)
 
     modmap = XGetModifierMapping (dpy);
 
-    if (modmap != NULL && modmap->max_keypermod > 0)
-    {
-        for (i = 0; i < 8 * modmap->max_keypermod; i++)
-        {
+    if (modmap != NULL && modmap->max_keypermod > 0) {
+        for (i = 0; i < 8 * modmap->max_keypermod; i++) {
             if (modmap->modifiermap[i] == nlock && nlock != 0)
                 lmasks.numlock = mask_table[i / modmap->max_keypermod];
             else if (modmap->modifiermap[i] == slock && slock != 0)
@@ -139,6 +487,10 @@ static xhkLockmasks get_offending_modifiers (Display * dpy)
 }
 
 
+// Use XGrabKey to bind a key to an X window
+//
+// As an X event keycode is different depending on whether Num,Caps,Scrolllock
+// is on, we need to bind for every permutation of Numlock, Capslock, Scrollock
 static void grab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks)
 {
@@ -281,6 +633,7 @@ static int XNonFatalErrorHandler(Display *display, XErrorEvent *event)
     char mesg[kBUFSIZ];
     const char *mtype = "XlibMessage";
     int (*XDefaultError)(Display *, XErrorEvent *);
+    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
 
     XGetErrorText(display, event->error_code, buffer, kBUFSIZ);
     XGetErrorDatabaseText(display, mtype, "XError", "X Error", mesg, 
@@ -289,354 +642,14 @@ static int XNonFatalErrorHandler(Display *display, XErrorEvent *event)
 
     // Find and call the default Xlib error handler.
     event->error_code = BadImplementation;
-    XSetErrorHandler(NULL);
-    XDefaultError = XSetErrorHandler(XNonFatalErrorHandler);
+    prev_XErrorHandler = XSetErrorHandler(NULL);
+    XDefaultError = XSetErrorHandler(prev_XErrorHandler);
     (*XDefaultError)(display, event);
     fprintf(stderr, "\n");
+
 #endif
 
     return 0;
-}
-
-
-
-int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
-        unsigned int modifiers, unsigned int event_mask,
-        void (*func)(xhkEvent, void *, void *, void *), 
-        void *arg1, void *arg2, void *arg3)
-{
-    int ret = 0;
-    int keycode;
-    xhkHotkey *h;
-
-    keycode = XKeysymToKeycode(config->display, keysym);
-    if (keycode == 0) {
-        fprintf(stderr, 
-            "xhkBindKey(): Error, unable to find keycode for keysym 0x%X\n",
-                (unsigned int) keysym);
-        return -1;
-    }
-
-    // Temporarily swap out Xlib fatal error handler for our own non-fatal
-    // one to handle XGrabKey errors as warnings. (e.g. Duplicate binds).
-    // As XGrabKey always returns 1, the Error handler is also the only way
-    // we can tell if an XGrabKey call fails.
-    XSync(config->display, 0);
-    global_last_X_error_code = 0;
-    XSetErrorHandler(&XNonFatalErrorHandler);
-    grab_key_all_screens(config->display, grab_window, keycode, modifiers, 
-            config->lmasks);
-    XSync(config->display, 0);
-    XSetErrorHandler(NULL);
-    if (global_last_X_error_code != 0) {
-        fprintf(stderr,
-            "xhkBindKey(): Warning, unable to fully bind key..\n"
-            "              ... already bound by another program?\n"
-            "              mod: %s + key: '%s'\n",
-            xhkModifiersToString(modifiers), XKeysymToString(keysym));
-        ret = -1;
-    }
-
-    // Try search and redefine existing Hotkey. Add new one if none found.
-    h = config->hklist;
-    while (h->next != NULL 
-            && !(h->next->modifiers == modifiers && h->next->keycode ==keycode
-                 && h->next->event_mask == event_mask))
-        h = h->next;
-    if (h->next == NULL) {
-        h->next = malloc(sizeof(xhkHotkey));
-        h->next->next = NULL;
-    } else {
-        fprintf(stderr,
-                "xhkBindKey(): Warning, changing existing binding\n"
-                "              mod: %s + key: '%s'\n",
-            xhkModifiersToString(modifiers), XKeysymToString(keysym));
-    }
-
-    h = h->next;
-
-    h->keysym = keysym;
-    h->keycode = keycode;
-    h->modifiers = modifiers;
-    h->event_mask = (event_mask != 0) ? event_mask : xhkKeyPress;
-    h->func = func;
-    h->arg1 = arg1;
-    h->arg2 = arg2;
-    h->arg3 = arg3;
-    return ret;
-}
-
-
-int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
-        unsigned int modifiers, unsigned int event_mask)
-{
-    int ret = 0;
-    xhkHotkey *h, *hn;
-
-    int keycode;
-    keycode = XKeysymToKeycode(config->display, keysym);
-    if (keycode == 0) {
-        fprintf(stderr, 
-            "xhkUnBindKey(): Error, unable to find keycode for keysym: 0x%x\n",
-                (unsigned int) keysym);
-        return -1;
-    }
-
-    XSync(config->display, 0);
-    global_last_X_error_code = 0;
-    XSetErrorHandler(&XNonFatalErrorHandler);
-    ungrab_key_all_screens(config->display, grab_window, keycode, modifiers, 
-            config->lmasks);
-    XSync(config->display, 0);
-    XSetErrorHandler(NULL);
-    if (global_last_X_error_code != 0) {
-        fprintf(stderr,
-                "xhkUnBindKey(): X errors while unbinding\n"
-                "                mod: %s + key: '%s'\n",
-                xhkModifiersToString(modifiers), XKeysymToString(keysym));
-        ret = -1;
-    }
-
-    h = config->hklist;
-    while (h->next != NULL 
-            && !(h->next->modifiers == modifiers && h->next->keycode ==keycode
-                  && h->next->event_mask == event_mask))
-        h = h->next;
-    if (h->next == NULL) {
-        fprintf(stderr,
-                "xhkUnBindKey(): Key binding not found\n"
-                "                mod: %s + key: '%s'\n",
-                xhkModifiersToString(modifiers), XKeysymToString(keysym));
-        return -1;
-    }
-    hn = h->next;
-    h->next = h->next->next;
-    free(hn);
-    return ret;
-}
-
-
-static int call_function(xhkConfig *config, XKeyEvent xkey, 
-        unsigned int event_mask)
-{
-    xhkEvent hevent;
-    xhkHotkey *h;
-
-    hevent.lmasks = config->lmasks;
-    hevent.xkey = xkey;
-    hevent.keycode = xkey.keycode;
-    hevent.locks = xkey.state & ( config->lmasks.numlock
-            | config->lmasks.capslock | config->lmasks.scrolllock );
-    hevent.modifiers = xkey.state & ~(hevent.locks);
-    hevent.event_mask = event_mask;
-
-    // Can this function event matching be refactored any better? 
-    // It probably as simple as its going to get.
-    h = config->hklist;
-    while (h != NULL &&
-          !(h->modifiers == hevent.modifiers && h->keycode == hevent.keycode
-           && (h->event_mask & (event_mask & (xhkKeyPress | xhkKeyRelease)))
-           && !(!(h->event_mask & xhkKeyRepeat) && (event_mask & xhkKeyRepeat))))
-        h = h->next;
-    if (h != NULL) {
-        hevent.keysym = h->keysym;
-        (*h->func)(hevent, h->arg1, h->arg2, h->arg3);
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-
-// Process any pending key presses. Return when there
-// are no more pending. To block and wait for at least one, set wait_block = 1.
-void xhkPollKeys(xhkConfig *config, int wait_block)
-{
-    XEvent event, nev;
-    int handled_one = 0;
-    int matched;
-    int repeat_flag;
-
-    while (XPending(config->display) || (wait_block && !handled_one)) {
-
-        XNextEvent(config->display, &event);   // Blocks when no events pending.
-
-        repeat_flag = 0;
-
-        // Reenable when XkbSetDetectableAutoRepeat is fixed.
-#if 0
-        if (config->Xrepeat_detect == 1) {
-            if (event.type == KeyPress) {
-                if (config->last_key_state[event.xkey.keycode] == xhkKeyPress)
-                    repeat_flag = xhkKeyRepeat;
-                config->last_key_state[event.xkey.keycode] = xhkKeyPress;
-            }
-            if (event.type == KeyRelease)
-                config->last_key_state[event.xkey.keycode] = xhkKeyRelease;
-        }
-#endif
-
-        // This is a bit of a hack. In the event that X can't detect
-        // auto repeating keys itself, we try manually check whether the next
-        // event is an automatic key repeat. 
-        // Its a repeat when a KeyRelease is followed immedietly by a KeyPress.
-        // (See: http://stackoverflow.com/questions/2100654)
-        // One advantage is that using a small time difference threshold,
-        // we can protect against flaky hardware reporting spurious KeyRelease
-        // when the key is still held down, e.g. in my keyboard. User can 
-        // change this with xhkChangeRepeatThreshold(k).
-        //
-        // Only repeat KeyPress events, like above.
-        if (config->Xrepeat_detect == 0 && event.type == KeyRelease
-                && XEventsQueued(config->display, QueuedAfterReading)) {
-            XPeekEvent(config->display, &nev);
-            if (nev.type == KeyPress 
-                    && nev.xkey.time - event.xkey.time < config->repeat_threshold
-                    && nev.xkey.keycode == event.xkey.keycode) {
-                XNextEvent(config->display, &event);
-                repeat_flag = xhkKeyRepeat;
-            }
-        }
-
-        switch (event.type) {
-            case KeyPress:
-                matched = call_function(config, event.xkey, 
-                                        xhkKeyPress | repeat_flag);
-                if (matched == 1)
-                    handled_one = 1;
-                break;
-            case KeyRelease:
-                matched = call_function(config, event.xkey, 
-                                        xhkKeyRelease | repeat_flag);
-                if (matched == 1)
-                    handled_one = 1;
-                break;
-            default:
-                break;
-        }
-    }
-    return;
-}
-
-
-void xhkPrintEvent(xhkEvent event)
-{
-    printf("xhkPrintEvent(): Event type: %s %s %s, time: %i ms\n"
-           "                 mod: %s + key: '%s'\n",
-           (event.event_mask & xhkKeyPress) ? "xhkKeyPress" : "",
-           (event.event_mask & xhkKeyRelease) ? "xhkKeyRelease" : "",
-           (event.event_mask & xhkKeyRepeat) ? "xhkKeyRepeat" : "",
-           (int) event.xkey.time,
-           xhkModifiersToString(event.modifiers), XKeysymToString(event.keysym));
-    return;
-}
-
-
-char * xhkKeySymToString(KeySym keysym)
-{
-    static char strbuffer[11];             // max "0xFFFFFFFF" + '\0'
-    if (XKeysymToString(keysym) == NULL) {
-        snprintf(strbuffer, 11, "0x%x", (unsigned int) keysym);
-        return strbuffer;
-    }
-    return XKeysymToString(keysym);
-}
-
-
-char * xhkModifiersToString(unsigned int modifiers)
-{
-    static char strbuffer[256];
-    char tmpbuffer[14];             // max "0xFFFFFFFF | " + '\0'
-    unsigned int mods;
-
-    mods = modifiers;
-    strbuffer[0] = '\0';
-
-    if (mods == 0) {
-        strncat(strbuffer, "0x0", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        return strbuffer;
-    }
-    if (mods & ShiftMask ) {
-        strncat(strbuffer, "ShiftMask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~ShiftMask;
-    }
-    if (mods & LockMask ) {
-        strncat(strbuffer, "LockMask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~LockMask;
-    }
-    if (mods & ControlMask ) {
-        strncat(strbuffer, "ControlMask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~ControlMask;
-    }
-    if (mods & Mod1Mask ) {
-        strncat(strbuffer, "Mod1Mask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~Mod1Mask;
-    }
-    if (mods & Mod2Mask ) {
-        strncat(strbuffer, "Mod2Mask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~Mod2Mask;
-    }
-    if (mods & Mod3Mask ) {
-        strncat(strbuffer, "Mod3Mask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~Mod3Mask;
-    }
-    if (mods & Mod4Mask ) {
-        strncat(strbuffer, "Mod4Mask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~Mod4Mask;
-    }
-    if (mods & Mod5Mask ) {
-        strncat(strbuffer, "Mod5Mask | ", 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        mods &= ~Mod5Mask;
-    }
-    if (mods != 0) {
-        snprintf(tmpbuffer, sizeof(tmpbuffer), "0x%x | ", mods);
-        strncat(strbuffer, tmpbuffer, 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-    }
-    if (strlen(strbuffer) > 4)
-        strbuffer[strlen(strbuffer)-3] = '\0';      // Chop extra " | "
-
-    return strbuffer;
-}
-
-
-char * xhkModsKeyToString(unsigned int modifiers, KeySym keysym) 
-{
-    static char strbuffer[256];
-
-    strbuffer[0] = '\0';
-    if (modifiers != 0) {
-        strncat(strbuffer, xhkModifiersToString(modifiers), 
-                sizeof(strbuffer)-strlen(strbuffer)-1);
-        strncat(strbuffer, " + ", sizeof(strbuffer)-strlen(strbuffer)-1);
-    }
-    strncat(strbuffer, xhkKeySymToString(keysym), 
-            sizeof(strbuffer)-strlen(strbuffer)-1);
-
-    return strbuffer;
-}
-
-
-
-int xhkGetfd(xhkConfig *config)
-{
-    return XConnectionNumber(config->display);
-}
-
-
-void xhkSetRepeatThreshold(xhkConfig *config, unsigned int repeat_threshold)
-{
-    config->repeat_threshold = repeat_threshold;
-    return;
 }
 
 

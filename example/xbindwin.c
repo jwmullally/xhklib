@@ -8,6 +8,10 @@
 
 #include "xhklib.h"
 
+void focuswin(xhkEvent e, void *dispptr, void *winid, void *unused1);
+void bindwin(xhkEvent e, void *dispptr, void *winid, void *unused1);
+int XSilentErrorHandler(Display *display, XErrorEvent *event);
+
 Window get_active_window(Display *disp);
 int activate_window (Display *disp, Window win, int switch_desktop);
 char * get_property (Display *disp, Window win,
@@ -18,35 +22,64 @@ int client_msg(Display *disp, Window win, char *msg,
         unsigned long data4);
 
 
-// User definable bind keys.
-                                  // Bind key             // Set focus
-const int bindkeys[][2][2] = {{ { ControlMask, XK_1 }, { Mod1Mask, XK_1 } },
-                              { { ControlMask, XK_2 }, { Mod1Mask, XK_2 } },
-                              { { ControlMask, XK_3 }, { Mod1Mask, XK_3 } },
-                              { { ControlMask, XK_4 }, { Mod1Mask, XK_4 } },
-                              { { ControlMask, XK_5 }, { Mod1Mask, XK_5 } },
-                              { { ControlMask, XK_6 }, { Mod1Mask, XK_6 } },
-                              { { ControlMask, XK_7 }, { Mod1Mask, XK_7 } },
-                              { { ControlMask, XK_8 }, { Mod1Mask, XK_8 } }};
-
-// END user definable keys
+Window windows[8];      // Make sure this matches the number of 
+                        // bind/raise key pairs bound in main().
 
 
-#define LEN_BINDKEYS (sizeof(bindkeys)/(4*sizeof(int)))
-
-Window get_active_window(Display *disp);
-int activate_window (Display *disp, Window win, int switch_desktop);
-
-Window windows[LEN_BINDKEYS];
-
-
-int XSilentErrorHandler(Display *display, XErrorEvent *event)
+int main()
 {
+
+    Display* display = XOpenDisplay(NULL);
+    if (display == NULL) {
+        fprintf(stderr, "xbindwin: Error, unable to open X display: %s\n",
+                XDisplayName(NULL));
+        return -1;
+    }
+
+    xhkConfig *hkconfig;
+    hkconfig = xhkInit(NULL);
+
+    xhkBindKey(hkconfig, 0, XK_1, ControlMask, 0, &bindwin, display, (void *) 0, 0);
+    xhkBindKey(hkconfig, 0, XK_2, ControlMask, 0, &bindwin, display, (void *) 1, 0);
+    xhkBindKey(hkconfig, 0, XK_3, ControlMask, 0, &bindwin, display, (void *) 2, 0);
+    xhkBindKey(hkconfig, 0, XK_4, ControlMask, 0, &bindwin, display, (void *) 3, 0);
+    xhkBindKey(hkconfig, 0, XK_5, ControlMask, 0, &bindwin, display, (void *) 4, 0);
+    xhkBindKey(hkconfig, 0, XK_6, ControlMask, 0, &bindwin, display, (void *) 5, 0);
+    xhkBindKey(hkconfig, 0, XK_7, ControlMask, 0, &bindwin, display, (void *) 6, 0);
+    xhkBindKey(hkconfig, 0, XK_8, ControlMask, 0, &bindwin, display, (void *) 7, 0);
+
+    xhkBindKey(hkconfig, 0, XK_1, Mod1Mask, 0, &focuswin, display, (void *) 0, 0);
+    xhkBindKey(hkconfig, 0, XK_2, Mod1Mask, 0, &focuswin, display, (void *) 1, 0);
+    xhkBindKey(hkconfig, 0, XK_3, Mod1Mask, 0, &focuswin, display, (void *) 2, 0);
+    xhkBindKey(hkconfig, 0, XK_4, Mod1Mask, 0, &focuswin, display, (void *) 3, 0);
+    xhkBindKey(hkconfig, 0, XK_5, Mod1Mask, 0, &focuswin, display, (void *) 4, 0);
+    xhkBindKey(hkconfig, 0, XK_6, Mod1Mask, 0, &focuswin, display, (void *) 5, 0);
+    xhkBindKey(hkconfig, 0, XK_7, Mod1Mask, 0, &focuswin, display, (void *) 6, 0);
+    xhkBindKey(hkconfig, 0, XK_8, Mod1Mask, 0, &focuswin, display, (void *) 7, 0);
+
+    while(1)
+        xhkPollKeys(hkconfig, 1);
+
+    // We will never get here, but if we did...
+    xhkClose(hkconfig);
+    XCloseDisplay(display);
+
     return 0;
 }
 
 
-void focuswin(xhkEvent e, void *dispptr, void *winid, void *r3)
+void bindwin(xhkEvent e, void *dispptr, void *winid, void *unused1)
+{
+    Display *display = (Display *) dispptr;
+    int win_id = (int) winid;
+    windows[win_id] = get_active_window(display);
+    printf("bindwin(): %i key: %s, binding to window %p\n", win_id,
+            xhkModsKeyToString(e.modifiers, e.keysym), (void *) windows[win_id]);
+    return;
+}
+
+
+void focuswin(xhkEvent e, void *dispptr, void *winid, void *unused1)
 {
     Display *display = (Display *) dispptr;
     int win_id = (int) winid;
@@ -65,53 +98,21 @@ void focuswin(xhkEvent e, void *dispptr, void *winid, void *r3)
 }
 
 
-void bindwin(xhkEvent e, void *dispptr, void *winid, void *r3)
+int XSilentErrorHandler(Display *display, XErrorEvent *event)
 {
-    Display *display = (Display *) dispptr;
-    int win_id = (int) winid;
-    windows[win_id] = get_active_window(display);
-    printf("bindwin(): %i key: %s, binding to window %p\n", win_id,
-            xhkModsKeyToString(e.modifiers, e.keysym), (void *) windows[win_id]);
-    return;
-}
-
-
-int main()
-{
-    int k;
-
-    Display* display = XOpenDisplay(NULL);
-    if (display == NULL) {
-        fprintf(stderr, "xhkInit(): Error, unable to open X display: %s\n",
-                XDisplayName(NULL));
-        return -1;
-    }
-
-    xhkConfig hkconfig;
-    xhkInit(&hkconfig);
-
-    for(k=0; k<LEN_BINDKEYS; k++) {
-        xhkBindKey(&hkconfig, 0, bindkeys[k][0][1], bindkeys[k][0][0], 0, &bindwin, display, (void *) k, 0);
-        xhkBindKey(&hkconfig, 0, bindkeys[k][1][1], bindkeys[k][1][0], 0, &focuswin, display, (void *) k, 0);
-    }
-
-    while(1)
-        xhkPollKeys(&hkconfig, 1);
-
-    xhkClose(&hkconfig);
-    XCloseDisplay(display);
     return 0;
 }
 
 
-    // ***** wmctrl funcs *****
-
+// ***** wmctrl funcs *****
 // get_active_window(), activate_window(), get_property(), client_msg()
-// courtesy of wmctrl 1.0.7 (GPLv2) 
+//
+// Some lowlevel Xlib code courtesy of wmctrl 1.0.7 (GPLv2) 
 //             http://tomas.styblo.name/wmctrl/
 
 Window get_active_window(Display *disp)
 {
+    // Source: wmctrl 1.0.7 (GPLv2)
     char *prop;
     unsigned long size;
     Window ret = (Window)0;
@@ -126,7 +127,9 @@ Window get_active_window(Display *disp)
 }
 
 
-int activate_window (Display *disp, Window win, int switch_desktop) {
+int activate_window (Display *disp, Window win, int switch_desktop) 
+{
+    // Source: wmctrl 1.0.7 (GPLv2)
     unsigned long *desktop;
 
     if ((desktop = (unsigned long *)get_property(disp, win, XA_CARDINAL, "_NET_WM_DESKTOP", NULL)) == NULL) {
@@ -152,6 +155,7 @@ int activate_window (Display *disp, Window win, int switch_desktop) {
 char * get_property (Display *disp, Window win,
         Atom xa_prop_type, char *prop_name, unsigned long *size)
 {
+    // Source: wmctrl 1.0.7 (GPLv2)
     Atom xa_prop_name;
     Atom xa_ret_type;
     int ret_format;
@@ -191,6 +195,7 @@ int client_msg(Display *disp, Window win, char *msg,
         unsigned long data2, unsigned long data3,
         unsigned long data4)
 {
+    // Source: wmctrl 1.0.7 (GPLv2)
     XEvent event;
     long mask = SubstructureRedirectMask | SubstructureNotifyMask;
 
@@ -214,6 +219,3 @@ int client_msg(Display *disp, Window win, char *msg,
         return EXIT_FAILURE;
     }
 }
-
-
-

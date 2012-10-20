@@ -35,6 +35,9 @@
 
 static int global_last_X_error_code;
 
+static int call_function(xhkConfig *config, XKeyEvent xkey, 
+        unsigned int event_mask);
+static int test_event_match(xhkHotkey *base, xhkEvent *test);
 static xhkLockmasks get_offending_modifiers (Display * dpy);
 static void grab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks);
@@ -45,18 +48,33 @@ static void grab_key_all_screens(Display * dpy, Window grab_window,
 static void ungrab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks);
 static int XNonFatalErrorHandler(Display *display, XErrorEvent *event);
-static int call_function(xhkConfig *config, XKeyEvent xkey, 
-        unsigned int event_mask);
 
-
-int xhkInit(xhkConfig *config)
+/** @brief Initialize a xhklib library instance.
+ *
+ * Return an initialized xhklib control structure, 
+ * for use with with the rest of the keybinging functions.
+ *
+ * @param xDisplay if NULL, connect to the X Display set in the environment,
+ *        otherwise use the provided Xlib Display connection.
+ * @return an initialized xhkConfig control structure.
+ */
+xhkConfig * xhkInit(Display *xDisplay)
 {
+    xhkConfig *config;
     int i;
-    config->display = XOpenDisplay(NULL);
-    if (config->display == NULL) {
-        fprintf(stderr, "xhkInit(): Error, unable to open X display: %s\n",
-                XDisplayName(NULL));
-        return -1;
+    config = malloc(sizeof(xhkConfig));
+    if (xDisplay != NULL) {
+        config->display = xDisplay;
+        config->close_display_on_exit = 0;
+    } else {
+        config->display = XOpenDisplay(NULL);
+        config->close_display_on_exit = 1;
+        if (config->display == NULL) {
+            fprintf(stderr, "xhkInit(): Error, unable to open X display: %s\n",
+                    XDisplayName(NULL));
+            free(config);
+            return NULL;
+        }
     }
     config->hklist = malloc(sizeof(xhkHotkey));
     config->hklist->next = NULL;
@@ -73,17 +91,23 @@ int xhkInit(xhkConfig *config)
     if (config->Xrepeat_detect == 0) {
         fprintf(stderr, 
                 "hkcInit(): Warning, X server doesn't support key Autorepeat\n"
-                "           detection. Falling back to not-so-reliable manual\n"
-                "           repeat detection method.\n");
+                "             detection. Falling back to not-so-reliable manual\n"
+                "             repeat detection method.\n");
     }
 #else
     config->Xrepeat_detect = 0;
 #endif
 
-    return 0;
+    return config;
 }
 
-
+/** @brief Unbind keys and free any allocated resources.
+ *
+ * Unbind all previously bound keys, disconnect from X11
+ * and free any allocated memory.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ */
 void xhkClose(xhkConfig *config)
 {
     xhkHotkey *h, *hn;
@@ -94,11 +118,42 @@ void xhkClose(xhkConfig *config)
         h = hn->next;
     }
     config->hklist = NULL;
-    XCloseDisplay(config->display);
-    config->display = NULL;
+    if (config->close_display_on_exit) {
+        XCloseDisplay(config->display);
+        config->display = NULL;
+    }
+    free(config);
+    return;
 }
 
-
+/** @brief Bind a key to a function.
+ *
+ * Bind a key and any modifiers to a function.
+ * By default, we just watch for key presses, but key releases
+ * and key repeats can also be monitored.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ * @param grab_window If set to NULL, register the key globally.
+ *        Set to a particular Xlib Window pointer to only capture
+ *        key events for that particular window.
+ * @param keysym The key to bind to. This is an X11 KeySym symbol,
+ *        An example is "XK_P" for the P key.
+ *        Check /usr/include/X11/keysymdef.h for a list of these symbols.
+ * @param modifiers This is a bitmask of keyboard modifiers to bind with
+ *        the key. Example: ControlMask | ShiftMask | Mod1Mask.
+ *        Example list: "ShiftMask, LockMask, ControlMask, Mod1Mask, 
+ *        Mod2Mask, Mod3Mask, Mod4Mask, Mod5Mask"
+ *        These masks can be found in /usr/include/X11/X.h
+ * @param event_mask A bitmask combination of keyboard events to monitor.
+ *        If set to zero, only monitor keypresses. Can be any combination
+ *        of xhkKeyPress | xhkKeyRelease | xhkKeyRepeat.
+ * @param func The function pointer to call when the key binding is detected.
+ * @param arg1 Data to pass to func when called.
+ * @param arg2 Data to pass to func when called.
+ * @param arg3 Data to pass to func when called.
+ * @return 0 if successful, -1 if the key couldn't be bound successfully
+ *         or was already bound by another program.
+ */
 int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask,
         void (*func)(xhkEvent, void *, void *, void *), 
@@ -108,6 +163,14 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     int keycode;
     xhkHotkey *h;
     int (*prev_XErrorHandler)(Display *, XErrorEvent *);
+
+#ifdef DEBUG
+    fprintf(stderr,
+        "xhkBindKey(): Binding function %p to hotkey\n"
+        "                mod: %s + key: '%s'\n",
+        func, xhkModifiersToString(modifiers), XKeysymToString(keysym));
+#endif
+
 
     keycode = XKeysymToKeycode(config->display, keysym);
     if (keycode == 0) {
@@ -131,10 +194,9 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     if (global_last_X_error_code != 0) {
         fprintf(stderr,
             "xhkBindKey(): Warning, unable to fully bind key..\n"
-            "              ... already bound by another program?\n"
-            "              mod: %s + key: '%s'\n",
+            "                ... already bound by another program?\n"
+            "                mod: %s + key: '%s'\n",
             xhkModifiersToString(modifiers), XKeysymToString(keysym));
-        // TODO: Just return?
         ret = -1;
     }
 
@@ -150,7 +212,7 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     } else {
         fprintf(stderr,
                 "xhkBindKey(): Warning, changing existing binding\n"
-                "              mod: %s + key: '%s'\n",
+                "                mod: %s + key: '%s'\n",
             xhkModifiersToString(modifiers), XKeysymToString(keysym));
     }
 
@@ -167,6 +229,31 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     return ret;
 }
 
+/** @brief Unbind a previously bound key.
+ *
+ * Unbind a previously bound key and its associated modifiers.
+ * The key, modifiers, eventmask and grab_window must match
+ * those used with the xhkBindKey call used to register the key.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ * @param grab_window If set to NULL, (un)register the key globally.
+ *        Set to a particular Xlib Window pointer to only (un)capture
+ *        key events for that particular window.
+ * @param keysym The key to unbind. This is an X11 KeySym symbol,
+ *        An example is "XK_P" for the P key.
+ *        Check /usr/include/X11/keysymdef.h for a list of these symbols.
+ * @param modifiers This is a bitmask of keyboard modifiers to (un)bind with
+ *        the key. Example: ControlMask | ShiftMask | Mod1Mask.
+ *        Example list: "ShiftMask, LockMask, ControlMask, Mod1Mask, 
+ *        Mod2Mask, Mod3Mask, Mod4Mask, Mod5Mask"
+ *        These masks can be found in /usr/include/X11/X.h
+ * @param event_mask A bitmask combination of keyboard events to monitor.
+ *        If set to zero, only monitor keypresses. Can be any combination
+ *        of xhkKeyPress | xhkKeyRelease | xhkKeyRepeat.
+ * @return 0 if the key was unbound without any problems,
+ *         -1 if there were any X11 errors or if the key wasn't bound
+ *         in the first place.
+ */
 
 int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask)
@@ -194,7 +281,7 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     if (global_last_X_error_code != 0) {
         fprintf(stderr,
                 "xhkUnBindKey(): X errors while unbinding\n"
-                "                mod: %s + key: '%s'\n",
+                "                  mod: %s + key: '%s'\n",
                 xhkModifiersToString(modifiers), XKeysymToString(keysym));
         ret = -1;
     }
@@ -207,7 +294,7 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     if (h->next == NULL) {
         fprintf(stderr,
                 "xhkUnBindKey(): Key binding not found\n"
-                "                mod: %s + key: '%s'\n",
+                "                  mod: %s + key: '%s'\n",
                 xhkModifiersToString(modifiers), XKeysymToString(keysym));
         return -1;
     }
@@ -218,8 +305,30 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
 }
 
 
-// Process any pending key presses. Return when there
-// are no more pending. To block and wait for at least one, set wait_block = 1.
+/**
+ * @brief Check for and process any pending key presses.
+ *
+ * Check the X11 connection for any pending keybinding related events.
+ * When events are received, call their bound hotkey functions.
+ * If there are no key events waiting, return immedietly.
+ *
+ * If you are fitting this function into your programs event loop, to keep
+ * watching for and handling key events, you can either:
+ *
+ *      - Use this function mixed in with your existing code
+ *        to periodically poll X11 for key events,
+ *      - Create a seperate thread just to run this function on its own in 
+ *        an infinite loop,
+ *      - Use xhkGetXDisplay() to get the X11 connection file descriptor,
+ *        which can be used in your programs select() loop.
+ *
+ *
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ * @param wait_block If 0, check for any pending events and exit if there
+ *                   are none. If 1, block and wait for at least one event 
+ *                   before returning.
+ */
 void xhkPollKeys(xhkConfig *config, int wait_block)
 {
     XEvent event, nev;
@@ -234,6 +343,7 @@ void xhkPollKeys(xhkConfig *config, int wait_block)
         repeat_flag = 0;
 
         // Use X's repeat detection if supported.
+        // If we get two KeyPress in a row, its a repeat.
         if (config->Xrepeat_detect == 1) {
             if (event.type == KeyPress) {
                 if (config->last_key_state[event.xkey.keycode] == xhkKeyPress)
@@ -246,7 +356,7 @@ void xhkPollKeys(xhkConfig *config, int wait_block)
         // Manual X repeat detection. In the event that X can't detect
         // auto repeating keys itself, we try manually check whether the next
         // event is an automatic key repeat. 
-        // Its a repeat when a KeyRelease is followed immedietly by a KeyPress.
+        // It's a repeat when a KeyRelease is followed immedietly by a KeyPress.
         // (See: http://stackoverflow.com/questions/2100654)
         // One advantage is that using a small time difference threshold,
         // we can protect against flaky hardware reporting spurious KeyRelease
@@ -254,10 +364,11 @@ void xhkPollKeys(xhkConfig *config, int wait_block)
         // change this with xhkChangeRepeatThreshold(k).
         // 
         // Doesn't work unless both Release and Press events are in the queue 
-        // one after another. To handle that would need extra code to track
+        // one after another. To handle the case where some other event happens
+        // in the short interval between would need extra code to track
         // the last press/release time of each key.
         //
-        // Only repeat KeyPress events, like above.
+        // If it is a repeat, only send through KeyPress events, like above.
         if (config->Xrepeat_detect == 0 && event.type == KeyRelease
                 && XEventsQueued(config->display, QueuedAfterReading)) {
             XPeekEvent(config->display, &nev);
@@ -271,14 +382,12 @@ void xhkPollKeys(xhkConfig *config, int wait_block)
 
         switch (event.type) {
             case KeyPress:
-                matched = call_function(config, event.xkey, 
-                                        xhkKeyPress | repeat_flag);
+                matched = call_function(config, event.xkey, xhkKeyPress | repeat_flag);
                 if (matched == 1)
                     handled_one = 1;
                 break;
             case KeyRelease:
-                matched = call_function(config, event.xkey, 
-                                        xhkKeyRelease | repeat_flag);
+                matched = call_function(config, event.xkey, xhkKeyRelease | repeat_flag);
                 if (matched == 1)
                     handled_one = 1;
                 break;
@@ -290,10 +399,15 @@ void xhkPollKeys(xhkConfig *config, int wait_block)
 }
 
 
+/* @brief Print a xhkEvent struct to stdout. Useful for debugging.
+ *
+ * @param event A xhkEvent struct, usually passed to any hotkey bound
+ *              functions when they are called.
+ */
 void xhkPrintEvent(xhkEvent event)
 {
     printf("xhkPrintEvent(): Event type: %s %s %s, time: %i ms\n"
-           "                 mod: %s + key: '%s'\n",
+           "                   mod: %s + key: '%s'\n",
            (event.event_mask & xhkKeyPress) ? "xhkKeyPress" : "",
            (event.event_mask & xhkKeyRelease) ? "xhkKeyRelease" : "",
            (event.event_mask & xhkKeyRepeat) ? "xhkKeyRepeat" : "",
@@ -303,6 +417,16 @@ void xhkPrintEvent(xhkEvent event)
 }
 
 
+/**
+ * @brief Convert an X11 keysym to a string
+ *
+ * @param keysym An X11 KeySym symbol. An example is "XK_P" for the P key.
+ *        Check /usr/include/X11/keysymdef.h for a list of these symbols.
+ *
+ * @return A string representation of keysym. 
+ *         This returned string buffer is statically allocated, so it doesn't
+ *         need to be freed after use.
+ */
 char * xhkKeySymToString(KeySym keysym)
 {
     static char strbuffer[11];             // max "0xFFFFFFFF" + '\0'
@@ -313,7 +437,19 @@ char * xhkKeySymToString(KeySym keysym)
     return XKeysymToString(keysym);
 }
 
-
+/**
+ * @brief Convert a modifiers bitmask to a string
+ *
+ * @param modifiers This is a bitmask of keyboard modifiers to (un)bind with
+ *        the key. Example: ControlMask | ShiftMask | Mod1Mask.
+ *        Example list: "ShiftMask, LockMask, ControlMask, Mod1Mask, 
+ *        Mod2Mask, Mod3Mask, Mod4Mask, Mod5Mask"
+ *        These masks can be found in /usr/include/X11/X.h
+ *
+ * @return A string representation of keysym. 
+ *         This returned string buffer is statically allocated, so it doesn't
+ *         need to be freed after use.
+ */
 char * xhkModifiersToString(unsigned int modifiers)
 {
     static char strbuffer[256];
@@ -368,7 +504,21 @@ char * xhkModifiersToString(unsigned int modifiers)
     return strbuffer;
 }
 
-
+/* @brief Convert a key + modifier pair to a string.
+ *
+ * @param keysym An X11 KeySym symbol. An example is "XK_P" for the P key.
+ *        Check /usr/include/X11/keysymdef.h for a list of these symbols.
+ *
+ * @param modifiers This is a bitmask of keyboard modifiers to (un)bind with
+ *        the key. Example: ControlMask | ShiftMask | Mod1Mask.
+ *        Example list: "ShiftMask, LockMask, ControlMask, Mod1Mask, 
+ *        Mod2Mask, Mod3Mask, Mod4Mask, Mod5Mask"
+ *        These masks can be found in /usr/include/X11/X.h
+ *
+ * @return A string representation of the keysym + modifier pair.
+ *         This returned string buffer is statically allocated, so it doesn't
+ *         need to be freed after use.
+ */
 char * xhkModsKeyToString(unsigned int modifiers, KeySym keysym) 
 {
     static char strbuffer[256];
@@ -386,12 +536,28 @@ char * xhkModsKeyToString(unsigned int modifiers, KeySym keysym)
 }
 
 
-int xhkGetfd(xhkConfig *config)
+/** 
+ * @brief Get the X11 display connection being used to track hotkeys.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ *
+ * @return An Xlib connection Display pointer.
+ */
+Display * xhkGetXDisplay(xhkConfig *config)
 {
-    return XConnectionNumber(config->display);
+    return config->display;
 }
 
-
+/**
+ * @brief Set the keyboard autorepeat threshold.
+ *
+ * Set the maximum interval between a key press and a key release event
+ * to differentiate between a key repeat and seperate key presses and releases.
+ * The default is 10 ms.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ * @param repeat_threshold The repeat/press-release threshold, in milliseconds.
+ */
 void xhkSetRepeatThreshold(xhkConfig *config, unsigned int repeat_threshold)
 {
     config->repeat_threshold = repeat_threshold;
@@ -404,23 +570,8 @@ void xhkSetRepeatThreshold(xhkConfig *config, unsigned int repeat_threshold)
  */
 
 
-static int test_event_match(xhkHotkey *base, xhkEvent *test)
-{
-    // Pass if the key and modifiers match
-    if ( !(base->modifiers == test->modifiers && base->keycode == test->keycode) )
-        return 0;
-    // Pass if its a Press or Release event and we want them
-    if ( !((base->event_mask & xhkKeyPress) == (test->event_mask & xhkKeyPress)
-                || (base->event_mask & xhkKeyRelease) == (test->event_mask & xhkKeyRelease)) )
-        return 0;
-    // If its a repeat, pass if we want it
-    if ( test->event_mask & xhkKeyRepeat )
-        if ( !(base->event_mask & xhkKeyRepeat) )
-            return 0;
-    return 1;
-}
-
-
+// If a new X key event matches an entry in our hotkey list,
+// call its associated function
 static int call_function(xhkConfig *config, XKeyEvent xkey, 
         unsigned int event_mask)
 {
@@ -446,6 +597,24 @@ static int call_function(xhkConfig *config, XKeyEvent xkey,
     } else {
         return 0;
     }
+}
+
+
+// Used in call_function(). 
+static int test_event_match(xhkHotkey *base, xhkEvent *test)
+{
+    // Pass if the key and modifiers match
+    if ( !(base->modifiers == test->modifiers && base->keycode == test->keycode) )
+        return 0;
+    // Pass if its a Press or Release event and we want them
+    if ( !((base->event_mask & xhkKeyPress) == (test->event_mask & xhkKeyPress)
+                || (base->event_mask & xhkKeyRelease) == (test->event_mask & xhkKeyRelease)) )
+        return 0;
+    // If its a repeat, pass if we want it
+    if ( test->event_mask & xhkKeyRepeat )
+        if ( !(base->event_mask & xhkKeyRepeat) )
+            return 0;
+    return 1;
 }
 
 

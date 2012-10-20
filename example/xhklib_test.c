@@ -52,8 +52,8 @@ int main()
 {
     vquit = 0;
 
-    xhkConfig hkconfig;
-    xhkInit(&hkconfig);
+    xhkConfig *hkconfig;
+    hkconfig = xhkInit(NULL);
 
     // On Debian Linux, the list of XK_* keys are in:
     //   /usr/include/X11/keysym.h
@@ -63,36 +63,36 @@ int main()
     // This is also useful for finding which keys on a keyboard are mapped to:
     //   xbindkeys -mk
 
-    xhkBindKey(&hkconfig, 0, XK_P, 0, xhkKeyPress|xhkKeyRelease, &testPressRelease, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_P, 0, xhkKeyPress|xhkKeyRelease, &testPressRelease, 0, 0, 0);
 
-    xhkBindKey(&hkconfig, 0, XK_K, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_K, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_L, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_M, ControlMask | ShiftMask, xhkKeyRelease, &testRelease, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_N, ControlMask | ShiftMask, xhkKeyPress | xhkKeyRelease, &testPressRelease, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, 1234, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_R, 0, xhkKeyPress | xhkKeyRelease | xhkKeyRepeat, &testPressRelease, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_K, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_K, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_L, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_M, ControlMask | ShiftMask, xhkKeyRelease, &testRelease, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_N, ControlMask | ShiftMask, xhkKeyPress | xhkKeyRelease, &testPressRelease, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, 1234, ControlMask | ShiftMask, xhkKeyPress, &testPress, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_R, 0, xhkKeyPress | xhkKeyRelease | xhkKeyRepeat, &testPressRelease, 0, 0, 0);
     
-    xhkBindKey(&hkconfig, 0, XK_O, ControlMask | ShiftMask, xhkKeyPress | xhkKeyRepeat, &testPress, 0, 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_O, ControlMask | ShiftMask, xhkKeyRelease | xhkKeyRepeat, &testRelease, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_O, ControlMask | ShiftMask, xhkKeyPress | xhkKeyRepeat, &testPress, 0, 0, 0);
+    xhkBindKey(hkconfig, 0, XK_O, ControlMask | ShiftMask, xhkKeyRelease | xhkKeyRepeat, &testRelease, 0, 0, 0);
 
-    xhkSetRepeatThreshold(&hkconfig, 10);
+    xhkSetRepeatThreshold(hkconfig, 10);
 
-    xhkBindKey(&hkconfig, 0, XK_Q, 0, 0, &setquit, "quitting now...", 0, 0);
-    xhkBindKey(&hkconfig, 0, XK_U, 0, 0, &unbind_K, 0, (void *) &hkconfig, 0);
+    xhkBindKey(hkconfig, 0, XK_Q, 0, 0, &setquit, "quitting now...", 0, 0);
+    xhkBindKey(hkconfig, 0, XK_U, 0, 0, &unbind_K, 0, (void *) hkconfig, 0);
 
-    printf("xhk text: X11 fd: %x\n", (unsigned int) xhkGetfd(&hkconfig));
+    printf("xhk_test: X11 Display: %p\n", xhkGetXDisplay(hkconfig));
 
     // This loop waits on X11 keyboard events.
     // If you want to continue running other code while capturing the hotkeys
     // in the background, you'll have to run xhkPollKeys in a seperate thread.
     while (1) {
-        xhkPollKeys(&hkconfig, 1);
+        xhkPollKeys(hkconfig, 1);
         if (vquit == 1)
             break;
     }
 
-    xhkClose(&hkconfig);
+    xhkClose(hkconfig);
 
     return 0;
 }

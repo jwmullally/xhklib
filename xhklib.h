@@ -39,6 +39,7 @@ typedef struct xhkHotkey {
 
 typedef struct {
     Display *display;
+    int close_display_on_exit;
     xhkHotkey *hklist;        // LL: First node is sentinel.
     xhkLockmasks lmasks;
     unsigned char last_key_state[256]; //KeyCode is unsigned char in range[8,255]
@@ -47,7 +48,7 @@ typedef struct {
 } xhkConfig;
 
 
-int xhkInit(xhkConfig *config);
+xhkConfig * xhkInit(Display *xDisplay);
 void xhkClose(xhkConfig *config);
 int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask,
@@ -60,7 +61,7 @@ void xhkPrintEvent(xhkEvent event);
 char * xhkKeySymToString(KeySym keysym);
 char * xhkModifiersToString(unsigned int modifiers);
 char * xhkModsKeyToString(unsigned int modifiers, KeySym keysym);
-int xhkGetfd(xhkConfig *config);
+Display * xhkGetXDisplay(xhkConfig *config);
 void xhkSetRepeatThreshold(xhkConfig *config, unsigned int repeat_threshold);
 
 #endif  // __XHKLIB_H__

@@ -39,13 +39,13 @@ static int call_function(xhkConfig *config, XKeyEvent xkey,
         unsigned int event_mask);
 static int test_event_match(xhkHotkey *base, xhkEvent *test);
 static xhkLockmasks get_offending_modifiers (Display * dpy);
-static void grab_key(Display * dpy, Window grab_window, int keycode, 
+static int grab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks);
-static void ungrab_key(Display * dpy, Window grab_window, int keycode, 
+static int ungrab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks);
-static void grab_key_all_screens(Display * dpy, Window grab_window, 
+static int grab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks);
-static void ungrab_key_all_screens(Display * dpy, Window grab_window, 
+static int ungrab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks);
 static int XNonFatalErrorHandler(Display *display, XErrorEvent *event);
 
@@ -151,18 +151,16 @@ void xhkClose(xhkConfig *config)
  * @param arg1 Data to pass to func when called.
  * @param arg2 Data to pass to func when called.
  * @param arg3 Data to pass to func when called.
- * @return 0 if successful, -1 if the key couldn't be bound successfully
- *         or was already bound by another program.
+ * @return hotkey if successful, NULL if the key couldn't be bound
+ *         successfully or was already bound by another program.
  */
-int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
+void* xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask,
         void (*func)(xhkEvent, void *, void *, void *), 
         void *arg1, void *arg2, void *arg3)
 {
-    int ret = 0;
     int keycode;
     xhkHotkey *h;
-    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
 
 #ifdef DEBUG
     fprintf(stderr,
@@ -177,29 +175,20 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
         fprintf(stderr, 
             "xhkBindKey(): Error, unable to find keycode for keysym 0x%X\n",
                 (unsigned int) keysym);
-        return -1;
+        return NULL;
     }
 
-    // Temporarily swap out Xlib fatal error handler for our own non-fatal
-    // one to handle XGrabKey errors as warnings. (e.g. Duplicate binds).
-    // As XGrabKey always returns 1, the Error handler is also the only way
-    // we can tell if an XGrabKey call fails.
-    XSync(config->display, 0);
-    global_last_X_error_code = 0;
-    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
-    grab_key_all_screens(config->display, grab_window, keycode, modifiers, 
-            config->lmasks);
-    XSync(config->display, 0);
-    XSetErrorHandler(prev_XErrorHandler);
-    if (global_last_X_error_code != 0) {
+    if (grab_key_all_screens(config->display, grab_window, keycode, modifiers, 
+            config->lmasks) != 0) {
         fprintf(stderr,
-            "xhkBindKey(): Warning, unable to fully bind key..\n"
+            "xhkBindKey(): Error, unable to bind key..\n"
             "                ... already bound by another program?\n"
             "                mod: %s + key: '%s'\n",
             xhkModifiersToString(modifiers), XKeysymToString(keysym));
-        ret = -1;
+		return NULL;
     }
 
+	// Refactor this in the future
     // Try search and redefine existing Hotkey. Add new one if none found.
     h = config->hklist;
     while (h->next != NULL 
@@ -226,7 +215,7 @@ int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     h->arg1 = arg1;
     h->arg2 = arg2;
     h->arg3 = arg3;
-    return ret;
+    return h;
 }
 
 /** @brief Unbind a previously bound key.
@@ -260,7 +249,6 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
 {
     int ret = 0;
     xhkHotkey *h, *hn;
-    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
 
     int keycode;
     keycode = XKeysymToKeycode(config->display, keysym);
@@ -271,14 +259,8 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
         return -1;
     }
 
-    XSync(config->display, 0);
-    global_last_X_error_code = 0;
-    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
-    ungrab_key_all_screens(config->display, grab_window, keycode, modifiers, 
-            config->lmasks);
-    XSync(config->display, 0);
-    XSetErrorHandler(prev_XErrorHandler);
-    if (global_last_X_error_code != 0) {
+    if (ungrab_key_all_screens(config->display, grab_window, keycode, modifiers, 
+            config->lmasks) != 0) {
         fprintf(stderr,
                 "xhkUnBindKey(): X errors while unbinding\n"
                 "                  mod: %s + key: '%s'\n",
@@ -304,6 +286,25 @@ int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym,
     return ret;
 }
 
+/** @brief Unbind a previously bound key.
+ *
+ * Unbind a previously bound key and its associated modifiers.
+ *
+ * @param config An xhkConfig struct previously initialized by xhkInit()
+ * @param grab_window If set to NULL, (un)register the key globally.
+ *        Set to a particular Xlib Window pointer to only (un)capture
+ *        key events for that particular window.
+ * @param hotkey The hotkey to unbind. hotkey returned by xhkBindKey.
+ * @return 0 if the key was unbound without any problems,
+ *         -1 if there were any X11 errors or if the key wasn't bound
+ *         in the first place.
+ */
+int xhkUnBindKeyByHotkey(xhkConfig *config, Window grab_window, void* hotkey)
+{
+    xhkHotkey *h;
+	h = (xhkHotkey *)hotkey;
+	return xhkUnBindKey(config, grab_window, h->keysym, h->modifiers, h->event_mask);
+}
 
 /**
  * @brief Check for and process any pending key presses.
@@ -660,9 +661,18 @@ static xhkLockmasks get_offending_modifiers (Display * dpy)
 //
 // As an X event keycode is different depending on whether Num,Caps,Scrolllock
 // is on, we need to bind for every permutation of Numlock, Capslock, Scrollock
-static void grab_key(Display * dpy, Window grab_window, int keycode, 
+static int grab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks)
 {
+    // Temporarily swap out Xlib fatal error handler for our own non-fatal
+    // one to handle XGrabKey errors as warnings. (e.g. Duplicate binds).
+    // As XGrabKey always returns 1, the Error handler is also the only way
+    // we can tell if an XGrabKey call fails.
+    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
+	XSync(dpy, 0);
+	global_last_X_error_code = 0;
+    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
+
     // Based on code from xbindkeys: grab_key.c (GPLv2)
     if (grab_window == 0)
         grab_window = DefaultRootWindow(dpy);
@@ -673,7 +683,7 @@ static void grab_key(Display * dpy, Window grab_window, int keycode,
             False, GrabModeAsync, GrabModeAsync);
 
     if (modifiers == AnyModifier)
-        return;
+		goto end;
 
     if (lmasks.numlock)
         XGrabKey (dpy, keycode, modifiers | lmasks.numlock,
@@ -707,13 +717,21 @@ static void grab_key(Display * dpy, Window grab_window, int keycode,
                 modifiers | lmasks.numlock | lmasks.capslock |lmasks.scrolllock,
                 grab_window, False, GrabModeAsync, GrabModeAsync);
 
-    return;
+end:
+    XSync(dpy, 0);
+    XSetErrorHandler(prev_XErrorHandler);
+    return !global_last_X_error_code ? 0 : -1;
 }
 
 
-static void ungrab_key(Display * dpy, Window grab_window, int keycode, 
+static int ungrab_key(Display * dpy, Window grab_window, int keycode, 
         unsigned int modifiers, xhkLockmasks lmasks)
 {
+    int (*prev_XErrorHandler)(Display *, XErrorEvent *);
+    XSync(dpy, 0);
+    global_last_X_error_code = 0;
+    prev_XErrorHandler = XSetErrorHandler(&XNonFatalErrorHandler);
+
     // Based on code from xbindkeys: grab_key.c (GPLv2)
     if (grab_window == 0)
         grab_window = DefaultRootWindow(dpy);
@@ -723,7 +741,7 @@ static void ungrab_key(Display * dpy, Window grab_window, int keycode,
     XUngrabKey (dpy, keycode, modifiers, grab_window);
 
     if (modifiers == AnyModifier)
-        return;
+    	goto end;
 
     if (lmasks.numlock)
         XUngrabKey (dpy, keycode, modifiers | lmasks.numlock, grab_window);
@@ -751,37 +769,49 @@ static void ungrab_key(Display * dpy, Window grab_window, int keycode,
                 modifiers | lmasks.numlock | lmasks.capslock |lmasks.scrolllock,
                 grab_window);
 
-    return;
+end:
+    XSync(dpy, 0);
+    XSetErrorHandler(prev_XErrorHandler);
+    return !global_last_X_error_code ? 0 : -1;
 }
 
 
-static void grab_key_all_screens(Display * dpy, Window grab_window, 
+static int grab_key_all_screens(Display * dpy, Window grab_window, 
+        int keycode, unsigned int modifier, xhkLockmasks lmasks)
+{
+    // Based on code from xbindkeys: grab_key.c (GPLv2)
+    int i, j;
+    if (grab_window == 0) {
+        for (i = 0; i < ScreenCount (dpy); i++) {
+            if (grab_key(dpy, RootWindow (dpy, i), keycode, modifier, lmasks) == 0)
+				continue;
+			for (j = 0; j < i; ++j)
+				ungrab_key(dpy, RootWindow (dpy, j), keycode, modifier, lmasks);
+			return -1;
+		}
+    } else {
+        if (grab_key(dpy, grab_window, keycode, modifier, lmasks) != 0)
+			return -1;
+    }
+    return 0;
+}
+
+
+static int ungrab_key_all_screens(Display * dpy, Window grab_window, 
         int keycode, unsigned int modifier, xhkLockmasks lmasks)
 {
     // Based on code from xbindkeys: grab_key.c (GPLv2)
     int screen;
+	int ret = 0;
     if (grab_window == 0) {
         for (screen = 0; screen < ScreenCount (dpy); screen++)
-            grab_key(dpy, RootWindow (dpy, screen), keycode, modifier, lmasks);
+            if (ungrab_key(dpy, RootWindow (dpy, screen), keycode, modifier, lmasks) != 0)
+				ret = -1;
     } else {
-        grab_key(dpy, grab_window, keycode, modifier, lmasks);
+		if (ungrab_key(dpy, grab_window, keycode, modifier, lmasks) != 0)
+			ret = -1;
     }
-    return;
-}
-
-
-static void ungrab_key_all_screens(Display * dpy, Window grab_window, 
-        int keycode, unsigned int modifier, xhkLockmasks lmasks)
-{
-    // Based on code from xbindkeys: grab_key.c (GPLv2)
-    int screen;
-    if (grab_window == 0) {
-        for (screen = 0; screen < ScreenCount (dpy); screen++)
-            ungrab_key(dpy, RootWindow (dpy, screen), keycode, modifier, lmasks);
-    } else {
-        ungrab_key(dpy, grab_window, keycode, modifier, lmasks);
-    }
-    return;
+    return ret;
 }
 
 

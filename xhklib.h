@@ -50,12 +50,13 @@ typedef struct {
 
 xhkConfig * xhkInit(Display *xDisplay);
 void xhkClose(xhkConfig *config);
-int xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
+void* xhkBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask,
         void (*func)(xhkEvent, void *, void *, void *), 
         void *arg1, void *arg2, void *arg3);
 int xhkUnBindKey(xhkConfig *config, Window grab_window, KeySym keysym, 
         unsigned int modifiers, unsigned int event_mask);
+int xhkUnBindKeyByHotkey(xhkConfig *config, Window grab_window, void* hotkey);
 void xhkPollKeys(xhkConfig *config, int wait_block);
 void xhkPrintEvent(xhkEvent event);
 char * xhkKeySymToString(KeySym keysym);
